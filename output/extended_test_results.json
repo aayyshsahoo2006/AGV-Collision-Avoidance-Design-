@@ -1,0 +1,187 @@
+{
+  "timestamp": "2026-10-04 02:59:25 +0530",
+  "total_scenarios": 18,
+  "passed_scenarios": 18,
+  "pass_rate": "100.0%",
+  "results": [
+    {
+      "id": "SCN-01",
+      "name": "Nominal Free Path (Zero Obstacles)",
+      "expected": "Cruise at 1.2m/s in NORMAL",
+      "pass": true,
+      "details": {
+        "state": "NORMAL",
+        "v_cmd": "1.20 m/s"
+      }
+    },
+    {
+      "id": "SCN-02",
+      "name": "Far Obstacle in Corridor (x=4.2m)",
+      "expected": "Transition to WARNING",
+      "pass": true,
+      "details": {
+        "state": "WARNING",
+        "min_dist": "3.4m"
+      }
+    },
+    {
+      "id": "SCN-03",
+      "name": "Mid-Range Obstacle in Corridor (x=2.8m)",
+      "expected": "Transition to SLOWDOWN",
+      "pass": true,
+      "details": {
+        "state": "SLOWDOWN",
+        "min_dist": "2.0m"
+      }
+    },
+    {
+      "id": "SCN-04",
+      "name": "Close Obstacle (x=1.5m <= d_stop)",
+      "expected": "Immediate EMERGENCY_STOP",
+      "pass": true,
+      "details": {
+        "state": "EMERGENCY_STOP",
+        "min_dist": "0.7m"
+      }
+    },
+    {
+      "id": "SCN-05",
+      "name": "Head-On Closing AGV (v_rel=2.2m/s, TTC=1.9s)",
+      "expected": "TTC Warning -> SLOWDOWN",
+      "pass": true,
+      "details": {
+        "state": "SLOWDOWN",
+        "ttc": "1.91s"
+      }
+    },
+    {
+      "id": "SCN-06",
+      "name": "Critical Dynamic Closing (TTC=0.64s <= 1.0s)",
+      "expected": "Critical TTC -> EMERGENCY_STOP",
+      "pass": true,
+      "details": {
+        "state": "EMERGENCY_STOP",
+        "ttc": "0.64s"
+      }
+    },
+    {
+      "id": "SCN-07",
+      "name": "Departing Vehicle (v_obs=1.5m/s > v_agv=1.0m/s)",
+      "expected": "TTC = +inf, No False Alarm",
+      "pass": true,
+      "details": {
+        "state": "NORMAL",
+        "ttc": "Infinity",
+        "closing_v": "-0.5m/s"
+      }
+    },
+    {
+      "id": "SCN-08",
+      "name": "Crossing Obstacle Entering Path (x=2.5m, y=0.4m)",
+      "expected": "Detected in Corridor -> SLOWDOWN",
+      "pass": true,
+      "details": {
+        "state": "SLOWDOWN",
+        "in_corridor": true
+      }
+    },
+    {
+      "id": "SCN-09",
+      "name": "Crossing Obstacle Exited Path (x=2.5m, y=0.7m)",
+      "expected": "Outside Corridor -> Ignored (NORMAL)",
+      "pass": true,
+      "details": {
+        "state": "NORMAL",
+        "in_corridor": false
+      }
+    },
+    {
+      "id": "SCN-10",
+      "name": "Exact Corridor Boundary Edge (y=0.50m)",
+      "expected": "Containment Handled (SLOWDOWN)",
+      "pass": true,
+      "details": {
+        "state": "SLOWDOWN",
+        "in_corridor": true
+      }
+    },
+    {
+      "id": "SCN-11",
+      "name": "Obstacle Just Outside Corridor (y=0.55m)",
+      "expected": "Safely Ignored -> NORMAL",
+      "pass": true,
+      "details": {
+        "state": "NORMAL",
+        "in_corridor": false
+      }
+    },
+    {
+      "id": "SCN-12",
+      "name": "Obstacle Behind AGV (x=-2.0m)",
+      "expected": "Rejected by Forward Filter -> NORMAL",
+      "pass": true,
+      "details": {
+        "state": "NORMAL"
+      }
+    },
+    {
+      "id": "SCN-13",
+      "name": "Wide Angle Blind Spot (70 deg > 45 deg)",
+      "expected": "Rejected by FOV Cone -> NORMAL",
+      "pass": true,
+      "details": {
+        "state": "NORMAL"
+      }
+    },
+    {
+      "id": "SCN-14",
+      "name": "High-Density Aisle (4 Multiple Targets)",
+      "expected": "Prioritizes Closest Path Hazard (Obs #23)",
+      "pass": true,
+      "details": {
+        "selected_id": 23,
+        "state": "SLOWDOWN"
+      }
+    },
+    {
+      "id": "SCN-15",
+      "name": "Heavy Sensor Noise Stress (100 cycles, sigma=0.15m)",
+      "expected": "Hysteresis Suppresses State Jitter",
+      "pass": true,
+      "details": {
+        "noise_transitions": 0,
+        "stability": "100%"
+      }
+    },
+    {
+      "id": "SCN-16",
+      "name": "False Recovery Attempt (Hazard Reappears at 0.2s)",
+      "expected": "Maintains EMERGENCY_STOP / Timer Reset",
+      "pass": true,
+      "details": {
+        "fsm_held": "EMERGENCY_STOP",
+        "timer_reset": true
+      }
+    },
+    {
+      "id": "SCN-17",
+      "name": "Sustained Obstacle Clearance (1.2s continuous)",
+      "expected": "Smooth Recovery to NORMAL after 1.0s",
+      "pass": true,
+      "details": {
+        "recovered": true,
+        "required_clear_time": "1.0s"
+      }
+    },
+    {
+      "id": "SCN-18",
+      "name": "Sudden Obstacle at Standstill (v=0m/s, dist=0.8m)",
+      "expected": "Immediate EMERGENCY_STOP (Prevents start)",
+      "pass": true,
+      "details": {
+        "state": "EMERGENCY_STOP",
+        "v_cmd": "0.00 m/s"
+      }
+    }
+  ]
+}

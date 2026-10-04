@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AGV Collision Avoidance - Advanced Autonomous Navigation &amp; Safety Simulator</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; user-select: none; }
+    .state-normal    { background-color: #10b981; color: white; }
+    .state-warning   { background-color: #f59e0b; color: white; }
+    .state-slowdown  { background-color: #f97316; color: white; }
+    .state-emergency { background-color: #ef4444; color: white; animation: pulse 1s infinite; }
+    .state-avoiding  { background-color: #8b5cf6; color: white; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+    canvas { cursor: crosshair; }
+    .tab-btn { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; transition: all 0.15s; }
+    .tab-active { background-color: #3b82f6; color: white; }
+    .tab-inactive { background-color: #1e293b; color: #94a3b8; }
+    .tab-inactive:hover { background-color: #334155; color: #e2e8f0; }
+    input[type=range] { cursor: pointer; }
+    .path-node { cursor: pointer; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-3 flex flex-col items-center">
+<div class="w-full max-w-7xl space-y-3">
+
+  <!-- Header -->
+  <header class="bg-slate-800/90 border border-slate-700 rounded-xl p-3 flex flex-wrap items-center justify-between shadow-lg">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl">🤖</span>
+      <div>
+        <h1 class="text-lg font-bold text-blue-400">AGV Autonomous Navigation, Active Collision Avoidance &amp; Radar Subsystem</h1>
+        <p class="text-xs text-slate-400">APF Steering • 64-Ray LiDAR • Risk Heatmap • Obstacle Path Editor • Swept-Volume Detection</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <div id="mode-badge" class="bg-purple-600 px-3 py-1 rounded-full text-xs font-semibold text-white">MODE: DYNAMIC AVOIDANCE</div>
+      <div id="state-badge" class="state-normal px-3.5 py-1 rounded-full font-bold text-xs tracking-wider shadow">NORMAL</div>
+      <div class="text-xs bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700">
+        <span class="text-slate-400">Sim:</span> <span id="sim-time" class="font-mono text-emerald-400 font-bold">0.00s</span>
+      </div>
+      <button onclick="exportTelemetry()" class="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-200 transition">⬇ Export CSV</button>
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+
+    <!-- Canvas area (left 2/3) -->
+    <div class="lg:col-span-2 bg-slate-800 border border-slate-700 rounded-xl p-3 flex flex-col shadow-lg">
+
+      <!-- Policy row -->
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div class="flex items-center gap-3 text-xs">
+          <span class="font-semibold text-slate-200">Control:</span>
+          <label class="flex items-center gap-1 cursor-pointer text-slate-300">
+            <input type="radio" name="policy" value="avoid" checked onchange="setPolicy('avoid')" class="accent-purple-500">
+            <span>Dynamic Avoidance</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer text-slate-300">
+            <input type="radio" name="policy" value="brake_only" onchange="setPolicy('brake_only')" class="accent-red-500">
+            <span>Brake-Only</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer text-slate-300">
+            <input type="radio" name="policy" value="manual" onchange="setPolicy('manual')" class="accent-blue-500">
+            <span>Manual (WASD)</span>
+          </label>
+        </div>
+        <div class="flex items-center gap-2 text-[11px] text-slate-400">
+          <span class="inline-block w-2 h-2 rounded-full bg-blue-500"></span> AGV
+          <span class="inline-block w-2 h-2 rounded-full bg-red-500 ml-1"></span> Threat
+          <span class="inline-block w-2 h-2 rounded-full bg-rose-300 ml-1"></span> Path Node
+          <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 ml-1"></span> LiDAR
+        </div>
+      </div>
+
+      <!-- Canvas -->
+      <div class="relative w-full aspect-[16/9] bg-slate-950 rounded-lg overflow-hidden border border-slate-700/80">
+        <canvas id="heatCanvas" class="absolute inset-0 w-full h-full block" style="opacity:0.55;pointer-events:none;"></canvas>
+        <canvas id="simCanvas" class="absolute inset-0 w-full h-full block"></canvas>
+        <div class="absolute bottom-2 left-2 bg-slate-900/90 backdrop-blur px-2 py-1 rounded text-[11px] text-slate-300 border border-slate-700 flex items-center gap-2">
+          <span>🖱 Click: spawn obstacle</span>
+          <span>• Drag: move</span>
+          <span>• Right-click: add path waypoint</span>
+          <span id="manual-hint" class="hidden text-amber-300 font-bold">• Drive W/A/S/D</span>
+        </div>
+        <div id="heatmap-legend" class="hidden absolute top-2 right-2 bg-slate-900/90 backdrop-blur rounded p-2 text-[10px] text-slate-300 border border-slate-700/60">
+          <div class="font-bold mb-1 text-slate-200">Risk Heatmap</div>
+          <div class="flex items-center gap-1"><span style="display:inline-block;width:12px;height:8px;background:#10b981;border-radius:2px"></span> Low</div>
+          <div class="flex items-center gap-1"><span style="display:inline-block;width:12px;height:8px;background:#f59e0b;border-radius:2px"></span> Warning</div>
+          <div class="flex items-center gap-1"><span style="display:inline-block;width:12px;height:8px;background:#f97316;border-radius:2px"></span> Slow</div>
+          <div class="flex items-center gap-1"><span style="display:inline-block;width:12px;height:8px;background:#ef4444;border-radius:2px"></span> Critical</div>
+        </div>
+      </div>
+
+      <!-- Scenario + heatmap buttons -->
+      <div class="mt-2.5 flex flex-wrap gap-1.5 items-center">
+        <span class="text-xs font-semibold text-slate-400 mr-1">Scenarios:</span>
+        <button onclick="loadScenario(1)" class="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-200 transition">1. Free Cruise</button>
+        <button onclick="loadScenario(2)" class="px-2 py-1 bg-purple-700 hover:bg-purple-600 rounded text-xs text-white transition font-medium">2. Center Obstacle</button>
+        <button onclick="loadScenario(3)" class="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs text-white transition font-medium">3. Off-Track (User Case)</button>
+        <button onclick="loadScenario(4)" class="px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white transition font-medium">4. Dynamic Crossing</button>
+        <button onclick="loadScenario(5)" class="px-2 py-1 bg-amber-700 hover:bg-amber-600 rounded text-xs text-white transition font-medium">5. Slalom S-Curve</button>
+        <button onclick="loadScenario(6)" class="px-2 py-1 bg-rose-800 hover:bg-rose-700 rounded text-xs text-white transition font-medium">6. Full Gridlock</button>
+        <button onclick="clearObstacles()" class="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs ml-auto transition">Clear All</button>
+        <button id="btn-heatmap" onclick="toggleHeatmap()" class="px-2 py-1 bg-rose-900 hover:bg-rose-800 text-rose-300 rounded text-xs transition font-semibold">🔥 Heatmap OFF</button>
+      </div>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="space-y-3">
+
+      <!-- Tab row -->
+      <div class="flex gap-1">
+        <button id="tab-telemetry" class="tab-btn tab-active" onclick="switchTab('telemetry')">📊 Telemetry</button>
+        <button id="tab-patheditor" class="tab-btn tab-inactive" onclick="switchTab('patheditor')">🛤 Path Editor</button>
+        <button id="tab-tuning" class="tab-btn tab-inactive" onclick="switchTab('tuning')">⚙️ Tuning</button>
+      </div>
+
+      <!-- TELEMETRY PANEL -->
+      <div id="panel-telemetry" class="bg-slate-800 border border-slate-700 rounded-xl p-3 shadow-lg">
+        <h2 class="text-xs font-semibold text-slate-200 mb-2 flex items-center justify-between">
+          <span>Live Telemetry &amp; Safety HUD</span>
+          <span id="bypass-state" class="text-[11px] text-purple-400 font-bold">LANE: CENTER TRACK</span>
+        </h2>
+        <div class="grid grid-cols-2 gap-1.5 text-xs">
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Speed / Cmd</span>
+            <span id="hud-v" class="text-sm font-mono font-bold text-blue-400">0.00 / 1.20 m/s</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Heading / Steer</span>
+            <span id="hud-steering" class="text-sm font-mono font-bold text-purple-400">0.0°</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Min Surface Dist</span>
+            <span id="hud-dist" class="text-sm font-mono font-bold text-amber-400">-- m</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Time-To-Collision</span>
+            <span id="hud-ttc" class="text-sm font-mono font-bold text-purple-400">∞</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Dynamic d_stop</span>
+            <span id="hud-dstop" class="text-sm font-mono font-bold text-rose-400">1.00 m</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">LiDAR Hits</span>
+            <span id="hud-lidar" class="text-sm font-mono font-bold text-emerald-400">0 / 64</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Avoidance Events</span>
+            <span id="hud-avoid-count" class="text-sm font-mono font-bold text-violet-400">0</span>
+          </div>
+          <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 block text-[11px]">Emergency Stops</span>
+            <span id="hud-estop-count" class="text-sm font-mono font-bold text-rose-500">0</span>
+          </div>
+        </div>
+        <!-- Playback -->
+        <div class="mt-3 pt-2.5 border-t border-slate-700 flex items-center justify-between">
+          <button id="btn-play" onclick="togglePlay()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs text-white font-bold transition flex items-center gap-1">
+            <span>▶</span> Play
+          </button>
+          <button onclick="stepSim()" class="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-200 transition">Step (50ms)</button>
+          <button onclick="resetSim()" class="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-200 transition">Reset AGV</button>
+        </div>
+        <!-- Oscilloscope -->
+        <div class="mt-3 pt-2 border-t border-slate-700">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-semibold text-slate-200">📈 Oscilloscope</span>
+            <div class="text-[10px] text-slate-400 flex items-center gap-2">
+              <span class="text-blue-400">— Speed</span>
+              <span class="text-amber-400">— Distance</span>
+              <span class="text-purple-400">— Lateral Y</span>
+            </div>
+          </div>
+          <div class="w-full h-24 bg-slate-950 rounded border border-slate-700/80 overflow-hidden">
+            <canvas id="scopeCanvas" class="w-full h-full block"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- PATH EDITOR PANEL -->
+      <div id="panel-patheditor" class="hidden bg-slate-800 border border-slate-700 rounded-xl p-3 shadow-lg text-xs">
+        <h2 class="text-xs font-semibold text-slate-200 mb-2">🛤 Obstacle Path Editor</h2>
+        <p class="text-[11px] text-slate-400 mb-2">Select an obstacle, then <strong class="text-slate-200">right-click</strong> on the canvas to add waypoints. The obstacle will loop through them automatically.</p>
+        <div class="mb-2">
+          <label class="text-slate-300 text-[11px]">Selected Obstacle:</label>
+          <select id="path-obs-select" class="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200" onchange="onPathObsChange()">
+            <option value="">-- None --</option>
+          </select>
+        </div>
+        <div id="path-obs-controls" class="hidden space-y-2">
+          <div>
+            <div class="flex justify-between text-slate-300"><span>Speed (m/s):</span><span id="val-obs-speed" class="text-amber-400 font-mono font-bold">0.0</span></div>
+            <input type="range" id="slider-obs-speed" min="0" max="1.5" step="0.05" value="0" oninput="updateObsSpeed()" class="w-full accent-amber-500">
+          </div>
+          <div>
+            <div class="flex justify-between text-slate-300"><span>Radius (m):</span><span id="val-obs-radius" class="text-slate-400 font-mono">0.35</span></div>
+            <input type="range" id="slider-obs-radius" min="0.15" max="0.8" step="0.05" value="0.35" oninput="updateObsRadius()" class="w-full accent-slate-500">
+          </div>
+          <div id="path-waypoints" class="bg-slate-900 rounded p-2 border border-slate-700/60 max-h-28 overflow-y-auto text-[10px] font-mono text-slate-400 space-y-0.5">
+            <div class="text-slate-500 italic">No waypoints yet. Right-click canvas.</div>
+          </div>
+          <div class="flex gap-1.5">
+            <button onclick="clearObsPath()" class="flex-1 py-1 bg-rose-900 hover:bg-rose-800 text-rose-300 rounded text-[11px] transition">Clear Path</button>
+            <button onclick="removeSelectedObs()" class="flex-1 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-[11px] transition">Delete Obstacle</button>
+          </div>
+        </div>
+        <div class="mt-3 pt-2 border-t border-slate-700 text-[11px] text-slate-400">
+          <div class="font-semibold text-slate-300 mb-1">All Obstacles</div>
+          <div id="obs-table" class="space-y-0.5"></div>
+        </div>
+      </div>
+
+      <!-- TUNING PANEL -->
+      <div id="panel-tuning" class="hidden bg-slate-800 border border-slate-700 rounded-xl p-3 shadow-lg text-xs space-y-2">
+        <h2 class="text-xs font-semibold text-slate-200">⚙️ Interactive Parameter Tuning</h2>
+        <div>
+          <div class="flex justify-between text-slate-300 text-[11px]"><span>Cruise Speed (v_nom):</span><span id="val-vnom" class="font-mono text-blue-400 font-bold">1.2 m/s</span></div>
+          <input type="range" id="slider-vnom" min="0.5" max="2.2" step="0.1" value="1.2" oninput="updateParams()" class="w-full accent-blue-500">
+        </div>
+        <div>
+          <div class="flex justify-between text-slate-300 text-[11px]"><span>Max Deceleration (a):</span><span id="val-decel" class="font-mono text-rose-400 font-bold">1.2 m/s²</span></div>
+          <input type="range" id="slider-decel" min="0.5" max="2.5" step="0.1" value="1.2" oninput="updateParams()" class="w-full accent-rose-500">
+        </div>
+        <div>
+          <div class="flex justify-between text-slate-300 text-[11px]"><span>Safety Margin (d_s):</span><span id="val-safety" class="font-mono text-emerald-400 font-bold">0.3 m</span></div>
+          <input type="range" id="slider-safety" min="0.1" max="1.0" step="0.05" value="0.3" oninput="updateParams()" class="w-full accent-emerald-500">
+        </div>
+        <div>
+          <div class="flex justify-between text-slate-300 text-[11px]"><span>Heatmap Resolution:</span><span id="val-heatres" class="font-mono text-pink-400 font-bold">Medium</span></div>
+          <input type="range" id="slider-heatres" min="8" max="32" step="4" value="16" oninput="updateParams()" class="w-full accent-pink-500">
+        </div>
+        <div class="pt-1 flex flex-col gap-1 border-t border-slate-700">
+          <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 text-[11px]">
+            <input type="checkbox" id="check-lidar" checked class="accent-emerald-500"> Show 64-Ray LiDAR
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 text-[11px]">
+            <input type="checkbox" id="check-pred" checked class="accent-purple-500"> Show Trajectories
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 text-[11px]">
+            <input type="checkbox" id="check-paths" checked class="accent-rose-400"> Show Obstacle Paths
+          </label>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="bg-slate-800 border border-slate-700 rounded-xl p-2.5 shadow-lg">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">📜 Event &amp; Decision Journal</h3>
+      <button onclick="document.getElementById('event-log').innerHTML=''" class="text-[11px] text-slate-400 hover:text-slate-200">Clear</button>
+    </div>
+    <div id="event-log" class="h-20 overflow-y-auto bg-slate-950 rounded p-1.5 text-[11px] font-mono space-y-0.5 text-slate-300 border border-slate-700/50">
+      <div class="text-emerald-400">[0.00s] SYSTEM_ONLINE: APF + Risk Heatmap + Obstacle Path Editor active.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+
+const params = {
+  agv_length: 1.0, agv_width: 0.6,
+  max_v: 2.2, nominal_v: 1.2, deceleration: 1.2, reaction_time: 0.2,
+  safety_margin: 0.3, slowdown_margin: 1.2, warning_margin: 2.2,
+  critical_ttc: 1.0, warning_ttc: 2.5, corridor_margin: 0.25,
+  recovery_clear_time: 0.8, recovery_distance_buffer: 0.5,
+  sensor_max_range: 11.0, sensor_fov_deg: 110.0, num_lidar_rays: 64,
+  policy: "avoid", lane_width: 1.4,
+  heatmap_cells: 16
+};
+
+let agv = { x:1.0, y:0.0, theta:0.0, v:0.0, w:0.0, cmd_v:1.2 };
+let obstacles = [];
+let state = "NORMAL";
+let simTime = 0.0;
+let isRunning = false;
+let draggedObstacle = null;
+let lidarHits = [];
+let scopeHistory = [];
+let heatmapOn = false;
+let heatmapDirty = true;
+let avoidCount = 0, eStopCount = 0;
+let telemetryLog = [];
+let selectedObsId = null;
+let activeTab = "telemetry";
+let obsIdCounter = 1;
+
+const keysDown = {};
+
+const canvas    = document.getElementById('simCanvas');
+const ctx       = canvas.getContext('2d');
+const heatCanvas = document.getElementById('heatCanvas');
+const heatCtx   = heatCanvas.getContext('2d');
+const scopeCanvas = document.getElementById('scopeCanvas');
+const scopeCtx  = scopeCanvas.getContext('2d');
+
+const WORLD_X_MIN=-1, WORLD_X_MAX=14, WORLD_Y_MIN=-4, WORLD_Y_MAX=4;
+function toCanvasX(wx){ return (wx - WORLD_X_MIN)/(WORLD_X_MAX-WORLD_X_MIN)*canvas.width; }
+function toCanvasY(wy){ return canvas.height/2 - wy*(canvas.height/8.0); }
+function toWorldX(cx){ return cx/canvas.width*(WORLD_X_MAX-WORLD_X_MIN)+WORLD_X_MIN; }
+function toWorldY(cy){ return (canvas.height/2 - cy)/(canvas.height/8.0); }
+
+function calcStoppingDistance(v){
+  const ev=Math.max(v, params.nominal_v);
+  return ev*params.reaction_time + ev*ev/(2*params.deceleration) + params.safety_margin;
+}
+
+function switchTab(tab){
+  activeTab = tab;
+  ['telemetry','patheditor','tuning'].forEach(t=>{
+    document.getElementById(`panel-${t}`).classList.toggle('hidden', t!==tab);
+    const btn = document.getElementById(`tab-${t}`);
+    btn.classList.toggle('tab-active', t===tab);
+    btn.classList.toggle('tab-inactive', t!==tab);
+  });
+  if(tab==='patheditor') refreshObsTable();
+}
+
+function setPolicy(p){
+  params.policy=p;
+  document.getElementById('mode-badge').textContent=`MODE: ${p.toUpperCase().replace('_',' ')}`;
+  document.getElementById('manual-hint').classList.toggle('hidden',p!=='manual');
+  logEvent(`POLICY_SWITCH: [${p.toUpperCase()}]`);
+}
+
+function evaluateRisk(agvState){
+  const av = agvState || agv;
+  const d_stop = calcStoppingDistance(av.v);
+  const d_slow = d_stop + params.slowdown_margin;
+  const d_warn = d_slow + params.warning_margin;
+  const halfFovRad = params.sensor_fov_deg*0.5*Math.PI/180;
+  const halfAgvW = params.agv_width*0.5;
+
+  let highestState="NORMAL", minDist=1e9, minTTC=1e9;
+  let criticalObs=null, inCorridorAny=false;
+
+  if(agvState===undefined) lidarHits=[];
+
+  const agvFrontX = av.x + Math.cos(av.theta)*(params.agv_length*0.5);
+  const agvFrontY = av.y + Math.sin(av.theta)*(params.agv_length*0.5);
+
+  if(agvState===undefined){
+    for(let i=0;i<params.num_lidar_rays;i++){
+      const angle = av.theta - halfFovRad + (i/(params.num_lidar_rays-1))*(halfFovRad*2);
+      const rc=Math.cos(angle), rs=Math.sin(angle);
+      let rd=params.sensor_max_range, hit=null;
+      obstacles.forEach(o=>{
+        const ocx=o.x-agvFrontX, ocy=o.y-agvFrontY;
+        const proj=ocx*rc+ocy*rs;
+        if(proj>0){
+          const ps=(ocx*ocx+ocy*ocy)-proj*proj;
+          if(ps<=o.radius*o.radius){
+            const dh=proj-Math.sqrt(o.radius*o.radius-ps);
+            if(dh>0&&dh<rd){ rd=dh; hit={x:agvFrontX+rc*dh,y:agvFrontY+rs*dh}; }
+          }
+        }
+      });
+      if(hit) lidarHits.push(hit);
+    }
+  }
+
+  obstacles.forEach(obs=>{
+    const dx=obs.x-av.x, dy=obs.y-av.y;
+    const cosTh=Math.cos(-av.theta), sinTh=Math.sin(-av.theta);
+    const localX=dx*cosTh-dy*sinTh, localY=dx*sinTh+dy*cosTh;
+    obs.localX=localX; obs.localY=localY;
+    const centerDist=Math.hypot(localX,localY);
+    const surfaceDist=Math.max(0,centerDist-(params.agv_length*0.5)-obs.radius);
+    obs.surfaceDist=surfaceDist;
+    if(surfaceDist>params.sensor_max_range||localX<-(params.agv_length*0.5)){ obs.detected=false; return; }
+    const azimuth=Math.atan2(localY,Math.max(0.1,localX));
+    if(Math.abs(azimuth)>halfFovRad&&centerDist>2.0){ obs.detected=false; return; }
+    obs.detected=true;
+    const lateralOverlap=Math.abs(localY)-obs.radius;
+    const sweptEnvelope=halfAgvW+params.corridor_margin;
+    const inCorridor=(lateralOverlap<=sweptEnvelope)&&(localX>-(params.agv_length*0.5))&&(localX<params.sensor_max_range);
+    obs.inCorridor=inCorridor;
+    const relVx=obs.vx-av.v*Math.cos(av.theta), relVy=obs.vy-av.v*Math.sin(av.theta);
+    const closingV=-((localX*relVx+localY*relVy)/(centerDist||1));
+    obs.closingV=closingV;
+    const ttc=closingV>1e-4?(surfaceDist/closingV):Infinity;
+    obs.ttc=ttc;
+    let os="NORMAL";
+    if(inCorridor){
+      inCorridorAny=true;
+      if(surfaceDist<=d_stop||ttc<=params.critical_ttc) os="EMERGENCY_STOP";
+      else if(surfaceDist<=d_slow||ttc<=params.warning_ttc) os="SLOWDOWN";
+      else if(surfaceDist<=d_warn) os="WARNING";
+    }
+    const sev={"EMERGENCY_STOP":3,"SLOWDOWN":2,"WARNING":1,"NORMAL":0};
+    if(sev[os]>sev[highestState]||(sev[os]===sev[highestState]&&inCorridor&&surfaceDist<minDist)){
+      highestState=os; minDist=surfaceDist; minTTC=ttc; criticalObs=obs;
+    }
+  });
+  return {recommendedState:highestState,minDist,minTTC,d_stop,d_slow,d_warn,criticalObs,inCorridor:inCorridorAny};
+}
+
+function probeRisk(px, py){
+  const probe = {x:px,y:py,theta:0,v:params.nominal_v};
+  const d_stop=calcStoppingDistance(probe.v);
+  const d_slow=d_stop+params.slowdown_margin;
+  const d_warn=d_slow+params.warning_margin;
+  let level=0;
+  obstacles.forEach(obs=>{
+    const dx=obs.x-probe.x, dy=obs.y-probe.y;
+    const centerDist=Math.hypot(dx,dy);
+    const surf=Math.max(0,centerDist-0.5-obs.radius);
+    const lateralOverlap=Math.abs(dy)-obs.radius;
+    const sweptEnvelope=params.agv_width*0.5+params.corridor_margin;
+    const inCorr=(lateralOverlap<=sweptEnvelope)&&dx>-0.5&&dx<params.sensor_max_range;
+    if(inCorr){
+      if(surf<=d_stop) level=Math.max(level,3);
+      else if(surf<=d_slow) level=Math.max(level,2);
+      else if(surf<=d_warn) level=Math.max(level,1);
+    }
+    const halo=obs.radius+1.5;
+    if(centerDist<halo) level=Math.max(level,Math.min(3,Math.floor((1-(centerDist-obs.radius)/1.5)*3)));
+  });
+  return level;
+}
+
+function drawHeatmap(){
+  if(!heatmapOn||!heatmapDirty) return;
+  heatCanvas.width=canvas.width; heatCanvas.height=canvas.height;
+  heatCtx.clearRect(0,0,heatCanvas.width,heatCanvas.height);
+  const cells=params.heatmap_cells;
+  const cw=heatCanvas.width/cells, ch=heatCanvas.height/(cells/2);
+  const colors=["rgba(16,185,129,0.0)","rgba(245,158,11,0.55)","rgba(249,115,22,0.65)","rgba(239,68,68,0.75)"];
+  for(let cx=0;cx<cells;cx++){
+    for(let cy=0;cy<cells/2;cy++){
+      const wx=toWorldX((cx+0.5)*cw);
+      const wy=toWorldY((cy+0.5)*ch);
+      const lvl=probeRisk(wx,wy);
+      if(lvl>0){
+        heatCtx.fillStyle=colors[lvl];
+        heatCtx.fillRect(cx*cw, cy*ch, cw, ch);
+      }
+    }
+  }
+  heatmapDirty=false;
+}
+
+function toggleHeatmap(){
+  heatmapOn=!heatmapOn;
+  heatmapDirty=true;
+  document.getElementById('heatmap-legend').classList.toggle('hidden',!heatmapOn);
+  document.getElementById('btn-heatmap').textContent=heatmapOn?"🔥 Heatmap ON":"🔥 Heatmap OFF";
+  document.getElementById('btn-heatmap').className=heatmapOn
+    ?"px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs transition font-semibold"
+    :"px-2 py-1 bg-rose-900 hover:bg-rose-800 text-rose-300 rounded text-xs transition font-semibold";
+  if(!heatmapOn) { heatCtx.clearRect(0,0,heatCanvas.width,heatCanvas.height); }
+}
+
+function isGridlocked(){
+  const ahead = obstacles.filter(o => {
+    const dx = o.x - agv.x;
+    return dx > -0.5 && dx < Math.min(6.5, params.sensor_max_range);
+  });
+  if(ahead.length < 2) return false;
+
+  for(let i = 0; i < ahead.length; i++){
+    const refX = ahead[i].x;
+    const sameSlice = ahead.filter(o => Math.abs(o.x - refX) <= 1.5);
+    if(sameSlice.length >= 2){
+      const intervals = sameSlice.map(o => ({ lo: o.y - o.radius, hi: o.y + o.radius }))
+                                 .sort((a, b) => a.lo - b.lo);
+      const minNavGap = params.agv_width + params.corridor_margin * 2;
+      let merged = [{ ...intervals[0] }];
+      for(let j = 1; j < intervals.length; j++){
+        const last = merged[merged.length - 1];
+        if(intervals[j].lo <= last.hi + minNavGap){
+          last.hi = Math.max(last.hi, intervals[j].hi);
+        } else {
+          merged.push({ ...intervals[j] });
+        }
+      }
+      if(merged.some(seg => seg.lo <= -1.0 && seg.hi >= 1.0)){
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function computeAutonomousSteering(risk, dt){
+  if(params.policy==="manual"){
+    let sv=0, ss=0;
+    if(keysDown['KeyW']||keysDown['ArrowUp']) sv=params.nominal_v;
+    if(keysDown['KeyS']||keysDown['ArrowDown']) sv=-params.nominal_v*0.5;
+    if(keysDown['KeyA']||keysDown['ArrowLeft']) ss=0.8;
+    if(keysDown['KeyD']||keysDown['ArrowRight']) ss=-0.8;
+    if(risk.inCorridor&&risk.minDist<=risk.d_stop&&sv>0){ sv=0; state="EMERGENCY_STOP"; }
+    agv.cmd_v=sv; agv.w=ss; return;
+  }
+
+  if(state==="EMERGENCY_STOP"){
+    agv.w = -agv.theta * 2.5;
+    document.getElementById('bypass-state').textContent="⛔ EMERGENCY BRAKING";
+    return;
+  }
+
+  if(params.policy==="avoid"){
+    if(isGridlocked()){
+      agv.w = -agv.theta * 2.5;
+      document.getElementById('bypass-state').textContent="🚧 GRIDLOCK — BRAKING STRAIGHT";
+      return;
+    }
+
+    let Fy=-agv.y*1.8, Fx=3.0, Ry=0, Rx=0, active=false;
+    obstacles.forEach(obs=>{
+      const dx=obs.x-agv.x, dy=obs.y-agv.y;
+      const dist=Math.hypot(dx,dy);
+      if(dx>-0.5&&dist<4.5){
+        active=true;
+        const rep=20.0/Math.max(0.2,(dist-obs.radius)**2);
+        const sy=dy>=0?-1:1;
+        Ry+=sy*rep*1.6; Rx-=(dx/dist)*rep*0.5;
+      }
+    });
+    let tFx=Fx+Rx, tFy=Fy+Ry;
+    if(agv.y>2.5) tFy-=(agv.y-2.5)*8;
+    if(agv.y<-2.5) tFy-=(agv.y+2.5)*8;
+    const desired=Math.atan2(tFy,Math.max(0.5,tFx));
+    let err=desired-agv.theta;
+    while(err>Math.PI) err-=Math.PI*2;
+    while(err<-Math.PI) err+=Math.PI*2;
+    agv.w=Math.max(-1.8,Math.min(1.8,err*3.5));
+    if(active&&(Math.abs(Ry)>0.5||Math.abs(agv.y)>0.3)){
+      if(state!=="AVOIDING"){ avoidCount++; document.getElementById('hud-avoid-count').textContent=avoidCount; }
+      state="AVOIDING";
+      document.getElementById('bypass-state').textContent=`SWERVING (Y:${agv.y.toFixed(2)}m)`;
+    } else {
+      document.getElementById('bypass-state').textContent="LANE: CENTER TRACK";
+    }
+  } else {
+    agv.w=-agv.theta*2.5;
+    document.getElementById('bypass-state').textContent="LANE: CENTER (BRAKE ONLY)";
+  }
+}
+
+function updatePhysics(dt){
+  const risk=evaluateRisk();
+  const gridlocked = isGridlocked();
+
+  if(params.policy!=="manual"){
+    if(gridlocked && risk.inCorridor && risk.minDist <= risk.d_stop){
+      state="EMERGENCY_STOP";
+    } else if(gridlocked && risk.recommendedState==="EMERGENCY_STOP"){
+      state="EMERGENCY_STOP";
+    } else if(!gridlocked && state==="AVOIDING"){
+      if(risk.inCorridor && risk.minDist <= (params.agv_length * 0.45 + params.safety_margin * 0.3)){
+        state="EMERGENCY_STOP";
+      }
+    } else {
+      state=risk.recommendedState;
+    }
+  }
+  computeAutonomousSteering(risk,dt);
+  let targetV=params.nominal_v;
+  if(state==="EMERGENCY_STOP") targetV=0;
+  else if(state==="SLOWDOWN") targetV=params.nominal_v*0.45;
+  else if(state==="AVOIDING") targetV=params.nominal_v*0.85*(1-Math.min(0.5,Math.abs(agv.w)*0.25));
+  if(params.policy!=="manual") agv.cmd_v=targetV;
+  const maxDv=params.deceleration*dt;
+  agv.v=agv.v<agv.cmd_v?Math.min(agv.cmd_v,agv.v+maxDv):Math.max(agv.cmd_v,agv.v-maxDv);
+  obstacles.forEach(obs=>{
+    const d=Math.hypot(obs.x-agv.x,obs.y-agv.y);
+    if(d<(params.agv_length*0.45)+obs.radius){
+      agv.v=0; const prevState=state; state="EMERGENCY_STOP";
+      if(prevState!=="EMERGENCY_STOP"){ eStopCount++; document.getElementById('hud-estop-count').textContent=eStopCount; }
+      logEvent(`⛔ COLLISION_INTERLOCK: Hard stop at Obs #${obs.id}`);
+    }
+  });
+  agv.theta+=agv.w*dt;
+  agv.x+=agv.v*Math.cos(agv.theta)*dt;
+  agv.y+=agv.v*Math.sin(agv.theta)*dt;
+  if(agv.x>14.0){ agv.x=0.0; logEvent("WORLD_WRAP: AGV looped to next aisle."); }
+  obstacles.forEach(o=>{
+    if(o.path&&o.path.length>0){
+      const wp=o.path[o.pathIdx];
+      const dx=wp.x-o.x, dy=wp.y-o.y, d=Math.hypot(dx,dy);
+      const spd=o.pathSpeed||0.3;
+      if(d<0.1){ o.pathIdx=(o.pathIdx+1)%o.path.length; }
+      else { o.vx=(dx/d)*spd; o.vy=(dy/d)*spd; }
+    }
+    o.x+=o.vx*dt; o.y+=o.vy*dt;
+    if(!o.path||o.path.length===0){
+      if(o.y>3.2||o.y<-3.2) o.vy=-o.vy;
+    }
+  });
+  simTime+=dt;
+  scopeHistory.push({t:simTime,v:agv.v,dist:risk.minDist<20?risk.minDist:10,y:agv.y});
+  if(scopeHistory.length>200) scopeHistory.shift();
+  if(Math.round(simTime*20)%10===0){
+    telemetryLog.push({t:simTime.toFixed(2),v:agv.v.toFixed(3),y:agv.y.toFixed(3),state,dist:risk.minDist.toFixed(3),ttc:isFinite(risk.minTTC)?risk.minTTC.toFixed(3):'inf'});
+  }
+  heatmapDirty=true;
+  updateHUD(risk);
+}
+
+function logEvent(msg){
+  const el=document.getElementById('event-log');
+  const div=document.createElement('div');
+  div.className=msg.includes("COLLISION")||msg.includes("CRITICAL")||msg.includes("⛔")?"text-rose-400 font-bold":msg.includes("SWERVING")||msg.includes("AVOIDING")?"text-purple-300 font-bold":"text-amber-300";
+  div.textContent=`[${simTime.toFixed(2)}s] ${msg}`;
+  el.appendChild(div); el.scrollTop=el.scrollHeight;
+}
+
+function updateHUD(risk){
+  document.getElementById('sim-time').textContent=simTime.toFixed(2)+'s';
+  document.getElementById('hud-v').textContent=`${agv.v.toFixed(2)} / ${agv.cmd_v.toFixed(2)} m/s`;
+  document.getElementById('hud-steering').textContent=`${(agv.theta*180/Math.PI).toFixed(1)}°`;
+  document.getElementById('hud-dist').textContent=risk.minDist<100?`${risk.minDist.toFixed(2)} m`:'-- m';
+  document.getElementById('hud-ttc').textContent=isFinite(risk.minTTC)?`${risk.minTTC.toFixed(2)} s`:'∞';
+  document.getElementById('hud-dstop').textContent=`${risk.d_stop.toFixed(2)} m`;
+  document.getElementById('hud-lidar').textContent=`${lidarHits.length} / 64`;
+  const badge=document.getElementById('state-badge');
+  badge.textContent=state;
+  badge.className=`px-3.5 py-1 rounded-full font-bold text-xs tracking-wider shadow ${
+    state==="NORMAL"?"state-normal":state==="WARNING"?"state-warning":
+    state==="SLOWDOWN"?"state-slowdown":state==="AVOIDING"?"state-avoiding":"state-emergency"}`;
+}
+
+function drawScope(){
+  scopeCanvas.width=scopeCanvas.parentElement.clientWidth;
+  scopeCanvas.height=scopeCanvas.parentElement.clientHeight;
+  scopeCtx.clearRect(0,0,scopeCanvas.width,scopeCanvas.height);
+  scopeCtx.strokeStyle='#334155'; scopeCtx.lineWidth=1;
+  scopeCtx.beginPath(); scopeCtx.moveTo(0,scopeCanvas.height/2); scopeCtx.lineTo(scopeCanvas.width,scopeCanvas.height/2); scopeCtx.stroke();
+  if(scopeHistory.length<2) return;
+  const sx=scopeCanvas.width/200;
+  [[h=>h.v/params.max_v,'#60a5fa'],[h=>h.dist/10,'#fbbf24'],[h=>(h.y+4)/8,'#c084fc']].forEach(([fn,col])=>{
+    scopeCtx.strokeStyle=col; scopeCtx.lineWidth=1.5; scopeCtx.beginPath();
+    scopeHistory.forEach((pt,i)=>{ const x=i*sx, y=scopeCanvas.height-(fn(pt))*(scopeCanvas.height-10)-5; i===0?scopeCtx.moveTo(x,y):scopeCtx.lineTo(x,y); });
+    scopeCtx.stroke();
+  });
+}
+
+function draw(){
+  canvas.width=canvas.parentElement.clientWidth;
+  canvas.height=canvas.parentElement.clientHeight;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle='#1e293b'; ctx.lineWidth=1;
+  for(let x=-1;x<=14;x++){
+    const cx=toCanvasX(x); ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,canvas.height); ctx.stroke();
+    ctx.fillStyle='#475569'; ctx.font='10px monospace'; ctx.fillText(`${x}m`,cx+2,canvas.height-4);
+  }
+  [-params.lane_width,0,params.lane_width].forEach((ly,idx)=>{
+    ctx.strokeStyle=idx===1?'#0ea5e9':'#334155'; ctx.setLineDash([6,6]); ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(0,toCanvasY(ly)); ctx.lineTo(canvas.width,toCanvasY(ly)); ctx.stroke(); ctx.setLineDash([]);
+  });
+  if(heatmapOn){ drawHeatmap(); heatCanvas.width=canvas.width; heatCanvas.height=canvas.height; }
+
+  if(document.getElementById('check-pred').checked){
+    ctx.strokeStyle='rgba(168,85,247,0.3)'; ctx.lineWidth=3; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(toCanvasX(agv.x),toCanvasY(agv.y));
+    let px=agv.x,py=agv.y,pth=agv.theta;
+    for(let s=0;s<15;s++){ px+=0.3*Math.cos(pth); py+=0.3*Math.sin(pth); ctx.lineTo(toCanvasX(px),toCanvasY(py)); }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  const agvFX=agv.x+Math.cos(agv.theta)*(params.agv_length*0.5);
+  const agvFY=agv.y+Math.sin(agv.theta)*(params.agv_length*0.5);
+  const rOx=toCanvasX(agvFX), rOy=toCanvasY(agvFY);
+  const halfFov=params.sensor_fov_deg*0.5*Math.PI/180;
+  const rangePx=params.sensor_max_range*(canvas.width/15.0);
+  const grad=ctx.createRadialGradient(rOx,rOy,0,rOx,rOy,rangePx);
+  grad.addColorStop(0,'rgba(16,185,129,0.25)'); grad.addColorStop(1,'rgba(16,185,129,0.02)');
+  ctx.fillStyle=grad; ctx.beginPath(); ctx.moveTo(rOx,rOy);
+  ctx.arc(rOx,rOy,rangePx,-agv.theta-halfFov,-agv.theta+halfFov); ctx.closePath(); ctx.fill();
+  if(document.getElementById('check-lidar').checked){
+    ctx.strokeStyle='rgba(16,185,129,0.15)'; ctx.lineWidth=1;
+    lidarHits.forEach(h=>{
+      ctx.beginPath(); ctx.moveTo(rOx,rOy); ctx.lineTo(toCanvasX(h.x),toCanvasY(h.y)); ctx.stroke();
+      ctx.fillStyle='#34d399'; ctx.beginPath(); ctx.arc(toCanvasX(h.x),toCanvasY(h.y),2.5,0,Math.PI*2); ctx.fill();
+    });
+  }
+  obstacles.forEach(obs=>{
+    const ox=toCanvasX(obs.x), oy=toCanvasY(obs.y);
+    const rPx=obs.radius*(canvas.width/15.0);
+    ctx.strokeStyle='rgba(168,85,247,0.2)'; ctx.setLineDash([3,3]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(ox,oy,rPx+18,0,Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+    if(document.getElementById('check-paths').checked&&obs.path&&obs.path.length>1){
+      ctx.strokeStyle='rgba(251,191,36,0.5)'; ctx.setLineDash([3,4]); ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(ox,oy);
+      obs.path.forEach(wp=>ctx.lineTo(toCanvasX(wp.x),toCanvasY(wp.y)));
+      ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+      obs.path.forEach((wp,i)=>{
+        ctx.fillStyle=i===obs.pathIdx?'#f472b6':'#fbbf24';
+        ctx.beginPath(); ctx.arc(toCanvasX(wp.x),toCanvasY(wp.y),4,0,Math.PI*2); ctx.fill();
+      });
+    }
+    if(obs.vx!==0||obs.vy!==0){
+      if(document.getElementById('check-pred').checked){
+        ctx.strokeStyle='rgba(239,68,68,0.5)'; ctx.setLineDash([3,3]); ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(ox,oy); ctx.lineTo(toCanvasX(obs.x+obs.vx*2),toCanvasY(obs.y+obs.vy*2)); ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+    const selected=obs.id===selectedObsId;
+    ctx.fillStyle=obs.inCorridor?'#ef4444':(obs.detected?'#f59e0b':'#64748b');
+    ctx.beginPath(); ctx.arc(ox,oy,rPx,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=selected?'#f472b6':'#ffffff'; ctx.lineWidth=selected?3:1.5;
+    ctx.stroke();
+    ctx.fillStyle='#f8fafc'; ctx.font='bold 10px sans-serif';
+    ctx.fillText(`#${obs.id}`,ox-8,oy-rPx-3);
+  });
+  ctx.save();
+  ctx.translate(toCanvasX(agv.x),toCanvasY(agv.y));
+  ctx.rotate(-agv.theta);
+  const aw=params.agv_length*(canvas.width/15.0);
+  const ah=params.agv_width*(canvas.height/8.0);
+  ctx.fillStyle='#2563eb'; ctx.strokeStyle='#60a5fa'; ctx.lineWidth=2;
+  ctx.fillRect(-aw/2,-ah/2,aw,ah); ctx.strokeRect(-aw/2,-ah/2,aw,ah);
+  ctx.fillStyle='#38bdf8'; ctx.fillRect(aw/2-4,-ah/2,4,ah);
+  ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.moveTo(aw/4,0); ctx.lineTo(0,-ah/4); ctx.lineTo(0,ah/4); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  drawScope();
+}
+
+function loop(){
+  if(isRunning) updatePhysics(0.05);
+  draw();
+  requestAnimationFrame(loop);
+}
+function togglePlay(){
+  isRunning=!isRunning;
+  document.getElementById('btn-play').innerHTML=isRunning?"<span>⏸</span> Pause":"<span>▶</span> Play";
+  document.getElementById('btn-play').className=isRunning
+    ?"px-3 py-1 bg-amber-600 hover:bg-amber-500 rounded-lg text-xs text-white font-bold transition flex items-center gap-1"
+    :"px-3 py-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs text-white font-bold transition flex items-center gap-1";
+}
+function stepSim(){ updatePhysics(0.05); draw(); }
+function resetSim(){
+  agv={x:1.0,y:0.0,theta:0.0,v:0.0,w:0.0,cmd_v:1.2};
+  simTime=0.0; state="NORMAL"; scopeHistory=[]; avoidCount=0; eStopCount=0; telemetryLog=[];
+  document.getElementById('hud-avoid-count').textContent='0';
+  document.getElementById('hud-estop-count').textContent='0';
+  logEvent("SIMULATION_RESET: Vehicle and metrics reset.");
+  draw();
+}
+function clearObstacles(){ obstacles=[]; selectedObsId=null; refreshObsTable(); logEvent("OBSTACLES_CLEARED."); }
+
+function makeObs(id,x,y,vx,vy,r){ return {id,x,y,vx:vx||0,vy:vy||0,radius:r||0.35,path:[],pathIdx:0,pathSpeed:0.3}; }
+function loadScenario(num){
+  resetSim(); obstacles=[];
+  if(num===1) logEvent("SCENARIO_1: Free path cruise.");
+  else if(num===2){ obstacles.push(makeObs(obsIdCounter++,5.5,0,0,0)); logEvent("SCENARIO_2: Center obstacle bypass."); }
+  else if(num===3){
+    obstacles.push(makeObs(obsIdCounter++,4.8,0.8,0,0)); obstacles.push(makeObs(obsIdCounter++,8.5,0,0,0));
+    logEvent("SCENARIO_3: User Case - Off-track (4.8m,0.8m) + center. Both safely avoided.");
+  } else if(num===4){
+    obstacles.push(makeObs(obsIdCounter++,6.0,2.0,0,-0.4));
+    logEvent("SCENARIO_4: Dynamic crossing pedestrian.");
+  } else if(num===5){
+    obstacles.push(makeObs(obsIdCounter++,4.0,0.5,0,0)); obstacles.push(makeObs(obsIdCounter++,7.5,-0.8,0,0)); obstacles.push(makeObs(obsIdCounter++,11.0,0.6,0,0));
+    logEvent("SCENARIO_5: Slalom S-Curve.");
+  } else if(num===6){
+    [-1.2,0,1.2].forEach(y=>obstacles.push(makeObs(obsIdCounter++,4.5,y,0,0)));
+    logEvent("SCENARIO_6: Full gridlock wall. Emergency stop interlock.");
+  }
+  refreshObsTable(); heatmapDirty=true; draw();
+}
+
+function refreshObsTable(){
+  const sel=document.getElementById('path-obs-select');
+  sel.innerHTML='<option value="">-- None --</option>';
+  obstacles.forEach(o=>{ const opt=document.createElement('option'); opt.value=o.id; opt.textContent=`Obs #${o.id} (${o.x.toFixed(1)},${o.y.toFixed(1)})`; sel.appendChild(opt); });
+  if(selectedObsId) sel.value=selectedObsId;
+  onPathObsChange();
+  const tbl=document.getElementById('obs-table');
+  tbl.innerHTML='';
+  if(!obstacles.length){ tbl.innerHTML='<div class="text-slate-500 italic">No obstacles.</div>'; return; }
+  obstacles.forEach(o=>{
+    const r=document.createElement('div');
+    r.className='flex justify-between items-center text-[10px] py-0.5 border-b border-slate-700/30';
+    r.innerHTML=`<span class="text-slate-300">#${o.id}</span><span class="text-slate-400">(${o.x.toFixed(1)},${o.y.toFixed(1)})</span><span class="text-amber-400">${(Math.hypot(o.vx,o.vy)).toFixed(2)} m/s</span><span class="text-slate-500">${o.path.length} wpts</span>`;
+    tbl.appendChild(r);
+  });
+}
+function onPathObsChange(){
+  const val=document.getElementById('path-obs-select').value;
+  selectedObsId=val?parseInt(val):null;
+  document.getElementById('path-obs-controls').classList.toggle('hidden',!selectedObsId);
+  if(selectedObsId){ updatePathWaypointList(); const obs=obstacles.find(o=>o.id===selectedObsId); if(obs){ document.getElementById('slider-obs-speed').value=obs.pathSpeed||0.3; document.getElementById('val-obs-speed').textContent=(obs.pathSpeed||0.3).toFixed(2); document.getElementById('slider-obs-radius').value=obs.radius; document.getElementById('val-obs-radius').textContent=obs.radius.toFixed(2); } }
+}
+function updatePathWaypointList(){
+  const obs=obstacles.find(o=>o.id===selectedObsId);
+  const el=document.getElementById('path-waypoints');
+  if(!obs){ el.innerHTML=''; return; }
+  if(!obs.path.length){ el.innerHTML='<div class="text-slate-500 italic">No waypoints yet. Right-click canvas.</div>'; return; }
+  el.innerHTML=obs.path.map((wp,i)=>`<div class="${i===obs.pathIdx?'text-pink-400 font-bold':'text-slate-400'}">${i}: (${wp.x.toFixed(2)}, ${wp.y.toFixed(2)})</div>`).join('');
+}
+function clearObsPath(){ const obs=obstacles.find(o=>o.id===selectedObsId); if(obs){obs.path=[];obs.pathIdx=0;obs.vx=0;obs.vy=0;} updatePathWaypointList(); }
+function removeSelectedObs(){ obstacles=obstacles.filter(o=>o.id!==selectedObsId); selectedObsId=null; refreshObsTable(); logEvent("OBSTACLE_REMOVED."); }
+function updateObsSpeed(){
+  const obs=obstacles.find(o=>o.id===selectedObsId); if(!obs) return;
+  obs.pathSpeed=parseFloat(document.getElementById('slider-obs-speed').value);
+  document.getElementById('val-obs-speed').textContent=obs.pathSpeed.toFixed(2);
+}
+function updateObsRadius(){
+  const obs=obstacles.find(o=>o.id===selectedObsId); if(!obs) return;
+  obs.radius=parseFloat(document.getElementById('slider-obs-radius').value);
+  document.getElementById('val-obs-radius').textContent=obs.radius.toFixed(2);
+  heatmapDirty=true;
+}
+
+function updateParams(){
+  params.nominal_v=parseFloat(document.getElementById('slider-vnom').value);
+  params.deceleration=parseFloat(document.getElementById('slider-decel').value);
+  params.safety_margin=parseFloat(document.getElementById('slider-safety').value);
+  const res=parseInt(document.getElementById('slider-heatres').value);
+  params.heatmap_cells=res;
+  const labels={8:'Low',12:'Medium',16:'Medium',20:'High',24:'High',28:'Very High',32:'Ultra'};
+  document.getElementById('val-vnom').textContent=params.nominal_v.toFixed(1)+' m/s';
+  document.getElementById('val-decel').textContent=params.deceleration.toFixed(1)+' m/s²';
+  document.getElementById('val-safety').textContent=params.safety_margin.toFixed(2)+' m';
+  document.getElementById('val-heatres').textContent=labels[res]||res;
+  heatmapDirty=true;
+}
+
+function exportTelemetry(){
+  if(!telemetryLog.length){ alert("Run the simulation first to generate telemetry data."); return; }
+  const header="time_s,speed_ms,lateral_y_m,state,min_dist_m,ttc_s\n";
+  const rows=telemetryLog.map(r=>`${r.t},${r.v},${r.y},${r.state},${r.dist},${r.ttc}`).join('\n');
+  const blob=new Blob([header+rows],{type:'text/csv'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='agv_telemetry.csv'; a.click();
+}
+
+window.addEventListener('keydown',e=>{ keysDown[e.code]=true; });
+window.addEventListener('keyup',e=>{ keysDown[e.code]=false; });
+
+canvas.addEventListener('mousedown',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const wx=toWorldX(e.clientX-rect.left);
+  const wy=toWorldY(e.clientY-rect.top);
+  if(e.button===0){
+    draggedObstacle=obstacles.find(o=>Math.hypot(o.x-wx,o.y-wy)<o.radius*1.5);
+    if(!draggedObstacle&&wx>0){
+      const no={id:obsIdCounter++,x:wx,y:wy,vx:0,vy:0,radius:0.35,path:[],pathIdx:0,pathSpeed:0.3};
+      obstacles.push(no); heatmapDirty=true;
+      logEvent(`OBSTACLE_SPAWNED: #${no.id} at (${wx.toFixed(2)},${wy.toFixed(2)})`);
+      if(activeTab==='patheditor') refreshObsTable();
+    } else if(draggedObstacle){
+      selectedObsId=draggedObstacle.id;
+      if(activeTab==='patheditor'){ document.getElementById('path-obs-select').value=draggedObstacle.id; onPathObsChange(); }
+    }
+  }
+});
+canvas.addEventListener('contextmenu',e=>{
+  e.preventDefault();
+  if(!selectedObsId) return;
+  const obs=obstacles.find(o=>o.id===selectedObsId); if(!obs) return;
+  const rect=canvas.getBoundingClientRect();
+  const wx=toWorldX(e.clientX-rect.left);
+  const wy=toWorldY(e.clientY-rect.top);
+  obs.path.push({x:wx,y:wy}); obs.pathIdx=obs.pathIdx||0;
+  updatePathWaypointList(); refreshObsTable();
+  logEvent(`PATH_WAYPOINT: Obs #${obs.id} → wp${obs.path.length-1} (${wx.toFixed(2)},${wy.toFixed(2)})`);
+});
+canvas.addEventListener('mousemove',e=>{
+  if(draggedObstacle){
+    const rect=canvas.getBoundingClientRect();
+    draggedObstacle.x=toWorldX(e.clientX-rect.left);
+    draggedObstacle.y=toWorldY(e.clientY-rect.top);
+    heatmapDirty=true;
+    if(activeTab==='patheditor') refreshObsTable();
+  }
+});
+window.addEventListener('mouseup',()=>{ draggedObstacle=null; });
+
+loadScenario(3);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

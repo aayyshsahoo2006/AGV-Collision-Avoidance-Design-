@@ -1,0 +1,28 @@
+# Build outputs and intermediate binaries
+build/
+bin/
+*.o
+*.obj
+*.exe
+*.out
+*.app
+
+# Temporary and system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+
+# IDE & Editor configs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

@@ -1,0 +1,125 @@
+{
+  "timestamp": "2026-10-04 02:59:25 +0530",
+  "test_suite": "AGV Collision Avoidance TC-01 to TC-10",
+  "summary": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0,
+    "pass_rate": "100.0%"
+  },
+  "system_performance": {
+    "control_loop_frequency_hz": 20.0,
+    "detection_latency_ms": 12.4,
+    "emergency_braking_reaction_ms": 200.0,
+    "maximum_agv_velocity_mps": 1.5,
+    "emergency_stop_margin_m": 0.3,
+    "false_alarm_rate_pct": 0.0,
+    "collision_avoidance_success_rate_pct": 100.0
+  },
+  "test_cases": {
+    "TC-01": {
+      "name": "No Obstacle",
+      "expected": "NORMAL",
+      "actual": "NORMAL",
+      "pass": true,
+      "metrics": {
+        "distance": "N/A",
+        "ttc": "N/A",
+        "stopping_dist": 1.26
+      }
+    },
+    "TC-02": {
+      "name": "Obstacle Outside FOV (60 deg)",
+      "expected": "NORMAL (Ignored)",
+      "actual": "NORMAL",
+      "pass": true,
+      "metrics": {
+        "distance": "Ignored (>45 deg FOV)",
+        "ttc": "N/A"
+      }
+    },
+    "TC-03": {
+      "name": "Obstacle Outside Range (12.0m)",
+      "expected": "NORMAL (Ignored)",
+      "actual": "NORMAL",
+      "pass": true,
+      "metrics": {
+        "distance": "Ignored (>10.0m range)",
+        "ttc": "N/A"
+      }
+    },
+    "TC-04": {
+      "name": "Obstacle Inside Warning Boundary",
+      "expected": "WARNING",
+      "actual": "WARNING",
+      "pass": true,
+      "metrics": {
+        "distance": "2.7m",
+        "ttc": "2.7s",
+        "d_warn": 4.26
+      }
+    },
+    "TC-05": {
+      "name": "Obstacle Requiring Slowdown",
+      "expected": "SLOWDOWN",
+      "actual": "SLOWDOWN",
+      "pass": true,
+      "metrics": {
+        "distance": "1.5m",
+        "ttc": "1.5s",
+        "d_slow": 2.26
+      }
+    },
+    "TC-06": {
+      "name": "Critical Obstacle (Emergency Stop)",
+      "expected": "EMERGENCY_STOP",
+      "actual": "EMERGENCY_STOP",
+      "pass": true,
+      "metrics": {
+        "distance": "0.6m",
+        "ttc": "0.6s",
+        "d_stop": 1.26
+      }
+    },
+    "TC-07": {
+      "name": "Non-Closing / Receding Obstacle",
+      "expected": "NORMAL / No False TTC Trigger",
+      "actual": "NORMAL",
+      "pass": true,
+      "metrics": {
+        "closing_velocity": "-0.5m/s",
+        "ttc": "Infinity"
+      }
+    },
+    "TC-08": {
+      "name": "Multiple Obstacles Priority Selection",
+      "expected": "SLOWDOWN (Prioritizes In-Corridor Obs #11)",
+      "actual": "SLOWDOWN (Obs ID 11)",
+      "pass": true,
+      "metrics": {
+        "selected_id": 11,
+        "distance": "1.6m"
+      }
+    },
+    "TC-09": {
+      "name": "Sensor Noise Robustness",
+      "expected": "Stable WARNING (No State Chattering)",
+      "actual": "50/50 Stable Cycles",
+      "pass": true,
+      "metrics": {
+        "stability_rate": "100.0%",
+        "samples": 50
+      }
+    },
+    "TC-10": {
+      "name": "Emergency Recovery & Hysteresis",
+      "expected": "Controlled Recovery After 1.0s Sustained Clear",
+      "actual": "Recovered cleanly after 1.0s",
+      "pass": true,
+      "metrics": {
+        "recovery_delay": "1.0s",
+        "hysteresis_buffer": "0.5m"
+      }
+    }
+  }
+}
